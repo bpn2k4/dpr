@@ -5,6 +5,7 @@ from transformers import AutoModel, AutoTokenizer
 import json
 from tqdm import tqdm
 import underthesea
+import random
 
 
 class DPRDataset(Dataset):
@@ -26,6 +27,7 @@ class DPRDataset(Dataset):
     self.path = path
     self.k = k
     self.use_word_segmentation = use_word_segmentation
+    self.load_data()
 
   def load_data(self):
     with open(self.path, "r", encoding="utf-8") as f:
@@ -60,6 +62,74 @@ class DPRDataset(Dataset):
             "attention_mask": output['attention_mask'][0].tolist(),
             "file": file
         }
+      if question_id not in self.question_dict:
+        if self.use_word_segmentation:
+          text = underthesea.word_tokenize(question, format="text")
+        else:
+          text = question
+        output = self.tokenizer(
+            text,
+            padding="max_length",
+            truncation=True,
+            return_tensors='pt',
+            max_length=self.question_length
+        )
+        self.question_dict[question_id] = {
+            "question_id": question_id,
+            "chunk_id": chunk_id,
+            "text": question,
+            "input_ids": output['input_ids'][0].tolist(),
+            "token_type_ids": output['token_type_ids'][0].tolist(),
+            "attention_mask": output['attention_mask'][0].tolist(),
+            "file": file
+        }
+    for i in tqdm(data):
+      question_id = i['question_id']
+      chunk_id_ = i['chunk_id']
+      file = i['file']
+      negative = [
+          chunk_id for chunk_id in self.chunk_dict
+          if self.chunk_dict[chunk_id]['file'] != file
+      ]
+      self.data.append({
+          "question_id": question_id,
+          "positive": chunk_id_,
+          "negative": negative
+      })
 
-  def next_batch(self):
-    pass
+  def __len__(self):
+    return len(self.data)
+
+  def __getitem__(self, index):
+    item = self.data[index]
+    question = self.question_dict[item['question_id']]
+    positive = self.chunk_dict[item['positive']]
+    negative = random.sample(item['negative'], self.k)
+    negative = [self.chunk_dict[i] for i in negative]
+    negative = [positive] + negative
+    label = [0 for _ in range(self.k + 1)]
+    label[0] = 1
+    data = {
+        "question_input_ids": torch.tensor(question['input_ids']),
+        "question_token_type_ids": torch.tensor(question['token_type_ids']),
+        "question_attention_mask": torch.tensor(question['attention_mask']),
+        "passage_input_ids": torch.stack([torch.tensor(i['input_ids']) for i in negative]),
+        "passage_token_type_ids": torch.stack([torch.tensor(i['token_type_ids']) for i in negative]),
+        "passage_attention_mask": torch.stack([torch.tensor(i['attention_mask']) for i in negative]),
+        "label": torch.tensor(label, dtype=torch.float32)
+    }
+    return data
+
+  def sample(self, index):
+    return self.__getitem__(index)
+
+
+if __name__ == "__main__":
+  dataset = DPRDataset('./data/bkgpt.test.json')
+  sample = dataset.sample(0)
+  print(sample['question_input_ids'].shape)
+  print(sample['question_token_type_ids'].shape)
+  print(sample['question_attention_mask'].shape)
+  print(sample['passage_input_ids'].shape)
+  print(sample['passage_token_type_ids'].shape)
+  print(sample['passage_attention_mask'].shape)

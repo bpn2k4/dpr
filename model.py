@@ -47,5 +47,11 @@ class DPR(nn.Module):
     passage = torch.sum(passage * passage_mask, 1)
     passage = passage / (passage_mask.sum(1) + 1e-9)
     passage = passage.view(bz, number_passage, -1)
-    score = torch.bmm(passage, question)
+
+    question_norm = torch.norm(question, p=2, dim=1, keepdim=True)
+    question = question / (question_norm + 1e-9)
+    passage_norm = torch.norm(passage, p=2, dim=2, keepdim=True)
+    passage = passage / (passage_norm + 1e-9)
+
+    score = torch.bmm(passage, question.unsqueeze(-1)).squeeze(-1)
     return score

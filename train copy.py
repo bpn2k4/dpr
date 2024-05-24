@@ -1,4 +1,3 @@
-from scheduler import LinearWarmupScheduler
 from model import DPR
 from data import DPRDataset, DataLoader
 from tqdm import tqdm
@@ -16,24 +15,21 @@ model.to(device)
 
 epochs = 5
 
-train = DPRDataset("./data/bkgpt.train.json", use_word_segmentation=True)
+train = DPRDataset("./data/bkgpt.train.json")
 train = DataLoader(dataset=train, batch_size=16, shuffle=True)
 test = DPRDataset("./data/bkgpt.test.json")
-test = DataLoader(dataset=test, batch_size=16, use_word_segmentation=True)
+test = DataLoader(dataset=test, batch_size=16)
 
 loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
-total_steps = epochs * len(train)
-warmup_steps = int(total_steps * 0.1)
-scheduler = LinearWarmupScheduler(optimizer, warmup_steps, total_steps)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-gradient_steps = 1
+accumulation_steps = 8
 for epoch in range(epochs):
   train_step = 0
   train_loss = 0
   train_loop = tqdm(train)
-  number_train_batch = len(train_loop)
   model.train()
+  optimizer.zero_grad()
   for batch_idx, batch in enumerate(train_loop):
     train_step += 1
     question_inputs = {
@@ -49,15 +45,14 @@ for epoch in range(epochs):
     output = model(question_inputs, passage_inputs)
     label = batch['label'].to(device)
     loss = loss_fn(output, label)
-    loss = loss / gradient_steps
-    train_loss += loss.item() * gradient_steps
+    loss = loss / accumulation_steps
+    train_loss += loss.item()
     loss.backward()
-    if (batch_idx + 1) % gradient_steps == 0 or (batch_idx + 1) == number_train_batch:
+    if (batch_idx + 1) % accumulation_steps == 0:
       optimizer.step()
       optimizer.zero_grad()
-      scheduler.step()
     train_loop.set_description(
-        f"Epoch [{epoch+1}/{epochs}] Training loss: {log(train_loss / train_step)} Lr: {log(optimizer.param_groups[0]['lr'], 6)}"
+        f"Epoch [{epoch+1}/{epochs}] Training loss: {log(train_loss / train_step)}"
     )
 
   test_loss = 0
